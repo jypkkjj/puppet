@@ -5,6 +5,7 @@ import ctypes
 import datetime
 import io
 import os
+import subprocess
 import threading
 import time
 import winreg
@@ -19,11 +20,10 @@ except Exception as e:
 
 try:
     import keyboard
-    from keyboard import write
 except Exception as e:
     print(e)
     from pywinauto import keyboard
-    from pywinauto.keyboard import send_keys as write
+    keyboard.write = keyboard.send_keys
 
 
 class Msg:
@@ -256,8 +256,8 @@ def go_to_top(h_root: int):
     for _ in range(99):
         if user32.GetForegroundWindow() == h_root:
             return True
-        xpos, ypos, _r, _b = get_rect(h_root)
-        user32.SetCursorPos(xpos + 50, ypos + 10)
+        xpos, _t, _r, ypos = get_rect(h_root)
+        user32.SetCursorPos(xpos + 50, ypos - 10)
         user32.mouse_event(Msg.MOUSEEVENTF_LEFTDOWN | Msg.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
         time.sleep(0.1)  # DON'T REMOVE!
 
@@ -313,13 +313,13 @@ def get_rect(obj_handle):
     return rect.left, rect.top, rect.right, rect.bottom
 
 
-def click_context_menu(text: str, x: int = 0, y: int = 0, delay: float = 0.1):
+def click_context_menu(text: str, x: int = 0, y: int = 0, delay: float = 0.5):
     '''点选右键菜单
     '''
     user32.SetCursorPos(x, y)
     user32.mouse_event(Msg.MOUSEEVENTF_RIGHTDOWN | Msg.MOUSEEVENTF_RIGHTUP, 0, 0, 0, 0)
     time.sleep(delay)
-    write(text)
+    keyboard.write(text)
 
 
 def wait_for_popup(root: int, popup_title=None, timeout: float = 3.0, interval: float = 0.01):
@@ -336,7 +336,7 @@ def wait_for_popup(root: int, popup_title=None, timeout: float = 3.0, interval: 
             break
 
 
-def wait_for_view(handle: int, timeout: float = 1, interval: float = 0.1):
+def wait_for_view(handle: int, timeout: float = 3, interval: float = 0.1):
     for _ in range(int(timeout / interval)):
         if user32.IsWindowVisible(handle):
             return True
@@ -416,6 +416,17 @@ def switch_combobox(index: int, handle: int):
         Msg.CBN_SELCHANGE << 16 | user32.GetDlgCtrlID(handle), handle)
 
 
-if __name__ == "__main__":
-    print('请在客户端目录内运行命令行！')
-    check_config()
+def run_app(path: str):
+    """运行应用程序"""
+    assert os.path.exists(path), '客户端路径("%s")错误' % path
+    # print('{} 正在尝试运行客户端("{}")...'.format(curr_time(), path))
+    pid = subprocess.Popen(path).pid
+    OpenProcess = ctypes.windll.kernel32.OpenProcess
+    CloseHandle = ctypes.windll.kernel32.CloseHandle
+    PROCESS_QUERY_INFORMATION = 1024
+    h_proc = OpenProcess(PROCESS_QUERY_INFORMATION, False, pid)
+    ret = user32.WaitForInputIdle(h_proc, -1)
+    CloseHandle(h_proc)
+
+    if ret == 0:
+        return pid

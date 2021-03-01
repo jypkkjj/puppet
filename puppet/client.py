@@ -5,21 +5,17 @@
 """
 __author__ = "睿瞳深邃(https://github.com/Raytone-D)"
 __project__ = 'Puppet'
-__version__ = "1.8.5"
+__version__ = "1.9.2"
 __license__ = 'MIT'
 
 import ctypes
-import ctypes.wintypes
 import time
 import io
-import subprocess
 import re
 import random
 import threading
-import os
 
 from functools import reduce, lru_cache, partial
-from importlib import import_module
 
 from . import util
 
@@ -45,7 +41,7 @@ class Ths:
         'trade': 512,
         'buy2': 512,
         'sell2': 512,
-        'mkt': 512,
+        'mkt': 165,
         'summary': 165,
         'balance': 165,
         'cash': 165,
@@ -150,80 +146,45 @@ class Account:
 
     @property
     def status(self):
-        return 'on-line' if user32.IsWindowVisible(self.root) else 'off-line'
+        return user32.IsWindowVisible(self.root)
 
-    def run(self, exe_path):
-        '''行情终端集成的多券商统一版的登录窗没有标题'''
-        assert 'xiadan' in os.path.basename(exe_path).split('.')\
-            and os.path.exists(
-                exe_path), '客户端路径("%s")错误' % exe_path
-        print('{} 正在尝试运行客户端("{}")...'.format(util.curr_time(), exe_path))
-        pid = subprocess.Popen(exe_path).pid
-
-        text = ctypes.c_ulong()
-        hwndChildAfter = None
-        for _ in range(30):
-            self.wait()
-            h_login = user32.FindWindowExW(None, hwndChildAfter, '#32770', None)
-            user32.GetWindowThreadProcessId(h_login, ctypes.byref(text))
-            if text.value == pid:
-                self._page = h_login
-                self.h_login = h_login
-                break
-            hwndChildAfter = h_login
-
-        if util.wait_for_view(self.h_login, timeout=9):
-            *self._handles, h1, h2, self._IMG = [user32.GetDlgItem(
-                self._page, i) for i in self.ctx.LOGIN]
-            self._handles.append(h2 if self.visible(h2) else h1)
-            self.root = user32.GetParent(self.h_login)
-            print('{} 登录界面准备就绪。'.format(util.curr_time()))
-
-    def login(self, account_no: str = '', password: str = '', comm_pwd: str = '',
-              client_path: str = ''):
-        self.run(client_path)
-        print('{} 正在登录交易服务器...'.format(util.curr_time()))
-
+    def login(self, account_no: str = '', password: str = '', **kwargs):
         from PIL.ImageGrab import grab
 
-        while True:
-            time.sleep(.5)
-            if user32.GetForegroundWindow() == self.h_login:
-                # 模拟键盘输入
-                util.keyboard.send(util.keyboard.KEY_UP)
-                info = (account_no, password, comm_pwd or util.image_to_string(
-                    grab(util.get_rect(self._IMG))))
-                for text in info:
-                    util.write(text)
-                    time.sleep(0.5)
-                    util.keyboard.send('\r')
-                break
-            user32.SetForegroundWindow(self.h_login)
+        pid = util.run_app(kwargs['client_path'])
+        self.root = util.find_one(visible=False)
+        id_proc = ctypes.c_ulong()
+        user32.GetWindowThreadProcessId(self.root, ctypes.byref(id_proc))
+        if id_proc.value == pid:
+            self.h_login = util.wait_for_popup(self.root)
+            if util.go_to_top(self.h_login) and util.wait_for_view(self.h_login):
+                time.sleep(1)  # ! WARNING: DON'T DELETE! Wait for focus.
+                util.keyboard.send('up')  # * Jump to the account_no
+                time.sleep(0.1)  # ! WARNING: DON'T DELETE! Wait for focus.
 
-        # self.capture()
-        if self.visible(times=20):
-            self.account_no = account_no
-            self.password = password
-            self.comm_pwd = comm_pwd
-            self.mkt = (0, 1) if util.get_text(self.get_handle('mkt')).startswith(
-                '上海') else (1, 0)
-            print('{} 已登入交易服务器。'.format(util.curr_time()))
-            self.init()
-            return {'puppet': "{} 木偶准备就绪！".format(util.curr_time())}
+                captcha = kwargs.get('comm_pwd') or util.image_to_string(
+                    grab(util.get_rect(user32.GetDlgItem(self.h_login, 1499))))
+                for text in (account_no, password, captcha):
+                    util.keyboard.write(text)
+                    time.sleep(0.1)
+                    util.keyboard.send('enter')
 
-        # 兼容广发证券
-        util.keyboard.send('\r')
-        if util.wait_for_view(self.root, 9):
-            self.init()
+                print('{} 正在登录交易服务器...'.format(util.curr_time()))
 
-        return {'puppet': '{} 登录失败或服务器失联'.format(util.curr_time())}
+                if util.wait_for_view(self.root, timeout=9):
+                    kwargs.update(account_no=account_no, password=password)
+                    self.infos = kwargs
+                    print('{} 已登入交易服务器。'.format(util.curr_time()))
+                    self.init()
+
+        return {'puppet': "{} {}".format(
+            util.curr_time(), '准备就绪！'if self.status else '登录失败！')}
 
     def exit(self):
         "退出系统并关闭程序"
-        assert self.visible(), "客户端没有登录"
-        user32.PostMessageW(self.root, util.Msg.WM_CLOSE, 0, 0)
-        print("已退出客户端!")
-        return self
+        if self.root:
+            user32.PostMessageW(self.root, util.Msg.WM_CLOSE, 0, 0)
+        return {'puppet': "{} 客户端已退出!".format(util.curr_time())}
 
     def fill_and_submit(self, *args, delay=0.1, label=''):
         user32.SetForegroundWindow(self._page)
@@ -234,8 +195,8 @@ class Account:
                     max_qty = util.get_text(self._handles[-1])
                     if max_qty not in (''):
                         break
-                    self.wait(delay)
-        self.wait(0.1)
+                    time.sleep(delay)
+        time.sleep(0.1)
         util.click_button(h_dialog=self._page, label=label)
         return self
 
@@ -264,7 +225,9 @@ class Account:
         self.switch(action)
         self._handles = self.get_handle(action)
         label = self.ctx.BUTTON.get(action)
-        return self.fill_and_submit(symbol, *args, delay=delay, label=label).wait().answer()
+        self.fill_and_submit(symbol, *args, delay=delay, label=label)
+        time.sleep(0.5)
+        return self.answer()
 
     def buy(self, symbol: str, price, quantity: int) -> dict:
         return self.trade('buy', symbol, price, quantity)
@@ -339,7 +302,8 @@ class Account:
     "Development"
 
     def __repr__(self):
-        return "<Puppet %s(%s | %s)>" % (self.__class__.__name__, __version__, self.status)
+        status = 'on-line' if self.status else 'off-line'
+        return "<Puppet %s(%s | %s)>" % (self.__class__.__name__, __version__, status)
 
     def bind(self, arg='', dirname: str = '', **kwargs):
         """"
@@ -356,8 +320,6 @@ class Account:
         if self.visible(self.root):
             self.birthtime = time.ctime()
             self.title = util.get_text(self.root)
-            self.mkt = (0, 1) if util.get_text(
-                self.get_handle('mkt')).startswith('上海') else (1, 0)
             self.idx = 0
             self.init()
             self.filename = '{}\\table.xls'.format(dirname or util.locate_folder())
@@ -370,7 +332,7 @@ class Account:
             if val:
                 return True
             elif times > 0:
-                self.wait()
+                time.sleep(0.5)
         return False
 
     def switch(self, name, delay=0.01):
@@ -385,15 +347,18 @@ class Account:
     def init(self):
         for name in self.ctx.INIT:
             self.switch(name, 0.3)
-
         if self.keyboard:
             def func(*args, **kwargs):
                 user32.SetForegroundWindow(self._page)
                 for text in args:
-                    util.write('{}\n'.format(text))
+                    util.keyboard.write('{}\n'.format(text))
                 return self
             self.fill_and_submit = func
 
+        time.sleep(2)  # ? 为了兼容银河证券临时加上
+
+        self.mkt = (0, 1) if util.get_text(
+            self.get_handle('mkt')).startswith('上海') else (1, 0)
         user32.ShowOwnedPopups(self.root, False)
 
         # 写入 table.xls 的绝对路径
@@ -404,10 +369,6 @@ class Account:
         self.make_heartbeat()
 
         print("{} 木偶准备就绪！".format(util.curr_time()))
-        return self
-
-    def wait(self, timeout=0.5):
-        time.sleep(timeout)
         return self
 
     def export_data(self, category: str = 'summary') -> dict:
@@ -423,7 +384,7 @@ class Account:
         if util.go_to_top(self.root):
 
             _l, ypos, xpos, _b = util.get_rect(self.root)
-            xpos -= 16
+            xpos -= 166
             ypos += 166 if category in self.ctx.SUMMARY_ else 332
 
             if util.get_text(user32.WindowFromPoint(ctypes.wintypes.POINT(xpos, ypos))) == '':
@@ -534,7 +495,7 @@ class Account:
         buf = ctypes.create_unicode_buffer(64)
         root = root or self.root
         for _ in range(9):
-            self.wait(0.1)
+            time.sleep(0.1)
             hPopup = user32.GetLastActivePopup(root)
             if hPopup != root:  # and self.visible(hPopup):
                 hTips = user32.FindWindowExW(hPopup, 0, 'Static', None)
@@ -633,12 +594,10 @@ class Account:
                 text = util.get_text(handle)
                 if text != '-':
                     return float(text)
-                self.wait(0.1)
+                time.sleep(0.1)
         data = [(code, _quote(code)) for code in codes]
         if df_first:
-            if not hasattr(self, 'pd'):
-                self.pd = import_module('pandas')
-            data = self.pd.DataFrame(data, columns=names)
+            data = util.pd.DataFrame(data, columns=names)
         return data
 
     def switch_account(self, serial_no: int):
