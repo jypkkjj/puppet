@@ -247,19 +247,16 @@ def find_single_handle(h_dialog, keyword: str = '', classname='Static') -> int:
     return handle.value
 
 
-def go_to_top(h_root: int):
-    '''窗口置顶'''
-    if user32.IsIconic(h_root):
-        user32.SwitchToThisWindow(h_root, True)
-        time.sleep(0.1)
+def go_to_top(h_root: int, timeout: float = 1.0, interval: float = 0.01):
+    """窗口置顶"""
+    keyboard.send('alt')  # ! enables calls to SwitchToThisWindow
 
-    for _ in range(99):
-        if user32.GetForegroundWindow() == h_root:
-            return True
-        xpos, _t, _r, ypos = get_rect(h_root)
-        user32.SetCursorPos(xpos + 50, ypos - 10)
-        user32.mouse_event(Msg.MOUSEEVENTF_LEFTDOWN | Msg.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
-        time.sleep(0.1)  # DON'T REMOVE!
+    if user32.SwitchToThisWindow(h_root, True) != 0:
+        stop = int(timeout/interval)
+        for _ in range(stop):
+            if user32.GetForegroundWindow() == h_root:
+                return True
+            time.sleep(0.5 if user32.IsIconic(h_root) else interval)  # ! DON'T REMOVE!
 
 
 def image_to_string(image, token={
@@ -344,7 +341,7 @@ def wait_for_view(handle: int, timeout: float = 3, interval: float = 0.1):
     return False
 
 
-def get_child_handle(h_parent=None, label=None, clsname=None, id_ctrl=None, visible=True):
+def get_child_handle(h_parent=None, label=None, clsname=None, id_ctrl=None, visible=None):
     '''获取子窗口句柄
 
     h_parent: None 表示桌面

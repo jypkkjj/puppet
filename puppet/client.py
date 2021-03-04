@@ -5,7 +5,7 @@
 """
 __author__ = "睿瞳深邃(https://github.com/Raytone-D)"
 __project__ = 'Puppet'
-__version__ = "1.9.2"
+__version__ = "1.10.1"
 __license__ = 'MIT'
 
 import ctypes
@@ -162,12 +162,14 @@ class Account:
                 util.keyboard.send('up')  # * Jump to the account_no
                 time.sleep(0.1)  # ! WARNING: DON'T DELETE! Wait for focus.
 
+                # TODO: 后续支持4K等分辨率
                 captcha = kwargs.get('comm_pwd') or util.image_to_string(
                     grab(util.get_rect(user32.GetDlgItem(self.h_login, 1499))))
                 for text in (account_no, password, captcha):
                     util.keyboard.write(text)
-                    time.sleep(0.1)
+                    time.sleep(0.5)  # ! Old processor should ask for more.
                     util.keyboard.send('enter')
+                    time.sleep(0.02)
 
                 print('{} 正在登录交易服务器...'.format(util.curr_time()))
 
@@ -204,13 +206,9 @@ class Account:
     def accno(self):
         return util.get_text(reduce(user32.GetDlgItem, self.ctx.ACCOUNT, self.root))
 
-    def trade(self, action: str, symbol: str = '', *args, delay: float = 0.1) -> dict:
+    def trade(self, action: str, *args) -> dict:
         """下单
-        客户端->系统->交易设置->默认买入价格(数量): 空、默认卖出价格(数量):空
-        :action: str, 交易方式; "buy2"或"sell2", 'margin'
-        :symbol: str, 证券代码; 例如'000001', "510500"
-        :arg: float or str of float, 判断为委托价格，int判断为委托策略, 例如'3.32', 3.32, 1
-        :quantity: int or str of int, 委托数量, 例如100, '100'
+
             委托策略(注意个别券商自定义索引)
             0 LIMIT              限价委托 沪深
             1 BEST5_OR_CANCEL    最优五档即时成交剩余撤销 上海
@@ -221,13 +219,24 @@ class Account:
             4 BEST5_OR_CANCEL    最优五档即时成交剩余撤销 深圳
             5 ALL_OR_CANCEL      全额成交或撤销 深圳
         """
-        util.go_to_top(self.root)
         self.switch(action)
-        self._handles = self.get_handle(action)
-        label = self.ctx.BUTTON.get(action)
-        self.fill_and_submit(symbol, *args, delay=delay, label=label)
-        time.sleep(0.5)
-        return self.answer()
+
+        if util.go_to_top(self.root):
+            for idx, arg in enumerate(args):
+                util.keyboard.write(str(arg))
+                time.sleep(0.1)
+
+                if idx == 0:
+                    h_name = user32.GetDlgItem(self._page, 1036)
+                    for _ in range(99):
+                        # * 等待检索市场归属和中文简称完成
+                        time.sleep(0.02)
+                        if util.get_text(h_name) != '':
+                            break
+
+                util.keyboard.send('enter')
+                time.sleep(0.02)
+            return self.answer()
 
     def buy(self, symbol: str, price, quantity: int) -> dict:
         return self.trade('buy', symbol, price, quantity)
@@ -342,7 +351,7 @@ class Account:
         if user32.SendMessageW(self.root, util.Msg.WM_COMMAND, 0x2000 << 16 | node, 0):
             self._page = reduce(user32.GetDlgItem, self.ctx.PAGE, self.root)
             time.sleep(delay)
-            return self
+            return True
 
     def init(self):
         for name in self.ctx.INIT:
